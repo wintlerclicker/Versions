@@ -67,6 +67,22 @@ DATA_DIR = os.path.join(HERE, "data")
 _V1_CACHE = None
 
 
+def _resolve_v1_path():
+    """Найти привет.txt и рядом с .py, и внутри PyInstaller-бандла (sys._MEIPASS)."""
+    candidates = []
+    # PyInstaller распаковывает data-файлы в sys._MEIPASS
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, V1_FILENAME))
+    candidates.append(os.path.join(HERE, V1_FILENAME))
+    # рядом с исполняемым файлом (frozen)
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), V1_FILENAME))
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def load_v1():
     """Загрузить v1.1.0 (привет.txt) как модуль через importlib.
 
@@ -77,11 +93,11 @@ def load_v1():
     if _V1_CACHE is not None:
         return _V1_CACHE
 
-    v1_path = os.path.join(HERE, V1_FILENAME)
-    if not os.path.exists(v1_path):
+    v1_path = _resolve_v1_path()
+    if v1_path is None:
         raise FileNotFoundError(
-            f"Не найден файл v1.1.0: {v1_path}. "
-            f"Положите '{V1_FILENAME}' рядом с dark_of_hemi_v2.0.py"
+            f"Не найден файл v1.1.0 '{V1_FILENAME}'. "
+            f"Положите его рядом с dark_of_hemi_v2.0.py (или соберите через build_exe.py)."
         )
 
     # .txt не распознаётся importlib как Python-исходник, поэтому передаём
@@ -1286,9 +1302,26 @@ class DarkOfHemiV2:
         self.mobile = is_mobile(args.mobile)
         self.ui = MobileUI(enabled=self.mobile)
 
+    # --- защита ---
+    def run_protection(self):
+        """Запустить статические проверки защиты (если модуль доступен)."""
+        try:
+            import protection
+        except ImportError:
+            return  # protection.py опционален
+        files = [V1_FILENAME, "dark_of_hemi_v2.0.py", "crypto80.py", "protection.py"]
+        base = HERE
+        files = [f for f in files if os.path.exists(os.path.join(base, f))]
+        manifest = protection.IntegrityGuard.build_manifest(files, base)
+        report = protection.ProtectionSuite.run_all(base, manifest, who="player")
+        if not report.get("anti_debug", True):
+            print("[защита] Обнаружен отладчик — некоторые функции ограничены.")
+        return report
+
     # --- режимы запуска ---
     def run_single(self):
         v1 = load_v1()
+        self.run_protection()
         if self.mobile:
             self.ui.banner(self.platform)
         else:
